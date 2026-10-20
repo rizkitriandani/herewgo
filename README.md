@@ -1,4 +1,4 @@
-# pi-herewego
+# herewgo
 
 Hardened autonomous loop engineering lifecycle for the Pi coding agent, combining:
 - **`herewego` 8-phase engineering lifecycle** (Preflight, Recon/Grilling, Spec/Tickets, Worktree TDD, Two-Axis Review, Security Hardening, Verification/Screenshots, PR report, Audit settlement).
