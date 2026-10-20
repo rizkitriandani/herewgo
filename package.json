@@ -1,0 +1,36 @@
+{
+  "name": "herewgo",
+  "version": "1.0.0",
+  "description": "Hardened autonomous loop engineering lifecycle for Pi coding agent with GLLA supervision",
+  "keywords": [
+    "pi-package"
+  ],
+  "main": "extensions/herewego.ts",
+  "bin": {
+    "loop-preflight": "bin/loop-preflight.sh",
+    "herdr-loop-run": "bin/herdr-loop-run.sh"
+  },
+  "pi": {
+    "extensions": [
+      "extensions/herewego.ts",
+      "extensions/goal-herdr-state.ts"
+    ],
+    "skills": [
+      "skills/herewego",
+      "skills/grill-with-docs",
+      "skills/to-spec",
+      "skills/to-tickets",
+      "skills/code-review",
+      "skills/security-and-hardening",
+      "skills/pr"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "author": "Akhmad Rizki Triandani <rizkitriandani@yahoo.co.id>",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rizkitriandani/herewgo.git"
+  }
+}
