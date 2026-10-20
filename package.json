@@ -16,13 +16,7 @@
       "extensions/goal-herdr-state.ts"
     ],
     "skills": [
-      "skills/herewego",
-      "skills/grill-with-docs",
-      "skills/to-spec",
-      "skills/to-tickets",
-      "skills/code-review",
-      "skills/security-and-hardening",
-      "skills/pr"
+      "skills/herewego"
     ]
   },
   "peerDependencies": {

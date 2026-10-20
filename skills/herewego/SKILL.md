@@ -17,6 +17,15 @@ When this skill is invoked or an engineering loop is initiated, strictly execute
 
 Do NOT pause for redundant confirmations between non-gated steps.
 
+**Self-Contained References:**
+If standalone companion skills are present in the environment (e.g., from Matt Pocock), use them directly. Otherwise, read the bundled references located inside this skill directory:
+- `references/grill-with-docs.md` (Phase 1)
+- `references/to-spec.md` (Phase 2)
+- `references/to-tickets.md` (Phase 2)
+- `references/code-review.md` (Phase 4)
+- `references/security-and-hardening.md` (Phase 5)
+- `references/pr.md` (Phase 7)
+
 ---
 
 ## 1. Skill Composition & Role Architecture
