@@ -83,11 +83,21 @@ export default function (pi: ExtensionAPI) {
         ctx.ui?.notify(`⚠️ Preflight Warning: ${preflight.reason} (proceeding in monitored loop)`, 'warning');
       }
 
-      // Check companion dependencies
+      // Check companion dependencies (runtime tools/commands or declared settings packages)
       const commands = pi.getCommands ? pi.getCommands() : [];
-      const hasGoal = commands.some((c: any) => c.name === 'goal');
+      const hasGoalCmd = commands.some((c: any) => c.name === 'goal' || c.invocationName === 'goal');
       const allTools = pi.getAllTools ? pi.getAllTools() : [];
-      const hasSubagent = allTools.some((t: any) => t.name === 'subagent');
+      const hasSubagentTool = allTools.some((t: any) => t.name === 'subagent');
+
+      const settings = pi.getSettings ? pi.getSettings() : null;
+      const packageSources = (settings?.packages || []).map((p: any) =>
+        typeof p === 'string' ? p : p.source || '',
+      );
+      const hasGoalInSettings = packageSources.some((s: string) => s.includes('pi-goal-list-loop-audit'));
+      const hasSubagentsInSettings = packageSources.some((s: string) => s.includes('pi-subagents'));
+
+      const hasGoal = hasGoalCmd || hasGoalInSettings;
+      const hasSubagent = hasSubagentTool || hasSubagentsInSettings;
 
       if (!hasGoal || !hasSubagent) {
         const missing: string[] = [];
@@ -100,14 +110,23 @@ export default function (pi: ExtensionAPI) {
             `Herewego requires ${missing.join(', ')} for background supervision and subagent delegation. Install now?`,
           );
           if (proceedInstall) {
-            ctx.ui.notify(`Installing ${missing.join(' ')}...`, 'info');
             try {
-              await pi.exec('pi', ['install', ...missing]);
-              ctx.ui.notify('Packages installed successfully! Reloading session...', 'info');
+              // pi install must be run sequentially per package
+              for (const pkg of missing) {
+                ctx.ui?.notify(`Installing ${pkg}...`, 'info');
+                const res = await pi.exec('pi', ['install', pkg]);
+                if (res.code !== 0) {
+                  throw new Error(res.stderr?.trim() || `Command failed with code ${res.code}`);
+                }
+              }
+              ctx.ui?.notify('Packages installed successfully! Reloading session...', 'info');
               await ctx.reload();
+              ctx.ui?.notify('Ready! Re-running /herewego...', 'info');
+              pi.sendUserMessage(`/herewego ${task}`, { expandPromptTemplates: true });
               return;
             } catch (err: any) {
-              ctx.ui.notify(`Installation failed: ${err.message}`, 'error');
+              ctx.ui?.notify(`Installation failed: ${err.message}`, 'error');
+              return;
             }
           }
         } else {
