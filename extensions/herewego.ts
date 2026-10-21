@@ -162,21 +162,23 @@ export async function handleSetup(pi: ExtensionAPI, ctx: ExtensionCommandContext
     } catch {}
   }
 
-  if (typeof ctx.reload === 'function') {
-    await ctx.reload();
-  }
-
+  // 5. Gather status and report BEFORE reloading the context
   const st = getHerewegoStatus(ctx.cwd || process.cwd());
   const report = [
     '✅ herewego Setup Complete:',
-    `• GLLA: ${st.hasGoal ? 'Installed' : 'Pending restart'}`,
-    `• pi-subagents: ${st.hasSubagents ? 'Installed' : 'Pending restart'}`,
+    `• GLLA: ${st.hasGoal ? 'Ready' : 'Installed'}`,
+    `• pi-subagents: ${st.hasSubagents ? 'Ready' : 'Installed'}`,
     `• Subagent default model: ${st.defaultSubagentModel || '9router/ag/gemini-3.8-flash-high'}`,
     `• Watchdog stall timeout: 5 minutes (${st.wedgeAlertMinutes || 5}m alert)`,
     `• RAM: ${st.preflight.availableMb}MB available`,
   ].join('\n');
 
   ctx.ui?.notify(report, 'info');
+
+  // 6. Reload as final step (ctx is invalidated after reload)
+  if (typeof ctx.reload === 'function') {
+    await ctx.reload();
+  }
 }
 
 const completions = (items: Array<[string, string]>) => (prefix: string) => {
@@ -275,6 +277,7 @@ export default function (pi: ExtensionAPI) {
           );
           if (runSetup) {
             await handleSetup(pi, ctx);
+            return;
           }
         } else {
           ctx.ui?.notify("⚠️ Companion packages missing. Run '/herewego setup' first.", 'warning');
