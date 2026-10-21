@@ -23,10 +23,22 @@ pi install ./packages/pi-herewego
 pi install npm:pi-goal-list-loop-audit
 ```
 
+## Commands
+
+| Command | Description |
+|---|---|
+| `/herewego <task>` | Start the 8-phase autonomous loop for `<task>` |
+| `/herewego run <task>` | Explicit run alias for starting a task |
+| `/herewego setup` | Automatically install companion packages (`GLLA`, `pi-subagents`) and configure 5m watchdog |
+| `/herewego status` | Display environment, companion packages, subagent model, and watchdog configuration |
+| `/herewego preflight` | Run memory and Git repository readiness check |
+| `/herewego help` | Display available commands |
+
 ## Usage
 
 In any project repository, run:
 ```text
-/herewego [task or feature description]
+/herewego setup        # Run initial setup (once per machine)
+/herewego [task]       # Start autonomous loop
 ```
 Pi will automatically run environment preflight checks, construct the full 8-phase contract, and activate supervised goal execution.

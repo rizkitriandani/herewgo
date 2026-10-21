@@ -1,6 +1,8 @@
 // @ts-nocheck
 import { execSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import type { ExtensionAPI, ExtensionCommandContext } from '@earendil-works/pi-coding-agent';
 
 export interface PreflightResult {
@@ -63,11 +65,192 @@ export function buildHerewegoObjective(task: string): string {
   ].join(' ');
 }
 
+export function getHerewegoStatus(cwd: string) {
+  const agentDir = process.env.PI_CODING_AGENT_DIR || join(homedir(), '.pi/agent');
+  let settings: any = {};
+  try {
+    settings = JSON.parse(readFileSync(join(agentDir, 'settings.json'), 'utf8'));
+  } catch {}
+
+  const packages = (settings.packages || []).map((p: any) => (typeof p === 'string' ? p : p.source || ''));
+  const hasGoal = packages.some((p: string) => p.includes('pi-goal-list-loop-audit'));
+  const hasSubagents = packages.some((p: string) => p.includes('pi-subagents'));
+
+  let gllaSettings: any = {};
+  const gllaPath = join(agentDir, 'pi-goal-list-loop-audit.settings.json');
+  try {
+    gllaSettings = JSON.parse(readFileSync(gllaPath, 'utf8'));
+  } catch {}
+
+  const preflight = checkPreflight(cwd || process.cwd());
+
+  return {
+    hasGoal,
+    hasSubagents,
+    defaultSubagentModel: settings.subagents?.defaultModel || null,
+    wedgeAlertMinutes: gllaSettings.wedgeAlertMinutes || null,
+    preflight,
+  };
+}
+
+export async function handleSetup(pi: ExtensionAPI, ctx: ExtensionCommandContext) {
+  const agentDir = process.env.PI_CODING_AGENT_DIR || join(homedir(), '.pi/agent');
+  ctx.ui?.notify('🔧 Setting up herewego environment...', 'info');
+
+  const settingsPath = join(agentDir, 'settings.json');
+  let settings: any = {};
+  try {
+    settings = JSON.parse(readFileSync(settingsPath, 'utf8'));
+  } catch {
+    settings = {};
+  }
+
+  const packages = (settings.packages || []).map((p: any) => (typeof p === 'string' ? p : p.source || ''));
+
+  // 1. Install companion packages if missing
+  const toInstall: string[] = [];
+  if (!packages.some((p: string) => p.includes('pi-goal-list-loop-audit'))) {
+    toInstall.push('npm:pi-goal-list-loop-audit');
+  }
+  if (!packages.some((p: string) => p.includes('pi-subagents'))) {
+    toInstall.push('npm:pi-subagents');
+  }
+
+  for (const pkg of toInstall) {
+    ctx.ui?.notify(`📦 Installing ${pkg}...`, 'info');
+    const res = await pi.exec('pi', ['install', pkg]);
+    if (res.code !== 0) {
+      ctx.ui?.notify(`Failed to install ${pkg}: ${res.stderr || res.stdout}`, 'error');
+    }
+  }
+
+  // 2. Configure default subagent model
+  if (!settings.subagents) settings.subagents = {};
+  if (!settings.subagents.defaultModel) {
+    settings.subagents.defaultModel = '9router/ag/gemini-3.8-flash-high';
+  }
+  try {
+    writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+  } catch (e: any) {
+    ctx.ui?.notify(`Could not update settings.json: ${e.message}`, 'warning');
+  }
+
+  // 3. Configure GLLA 5-minute watchdog settings
+  const gllaPath = join(agentDir, 'pi-goal-list-loop-audit.settings.json');
+  let gllaSettings: any = {};
+  try {
+    gllaSettings = JSON.parse(readFileSync(gllaPath, 'utf8'));
+  } catch {}
+
+  gllaSettings.wedgeAlertMinutes = 5;
+  gllaSettings.auditorStallMs = 300000;
+  gllaSettings.auditorToolTimeoutMs = 300000;
+  gllaSettings.decisionPauseBudget = 0;
+  gllaSettings.autoAcceptDrafts = true;
+
+  try {
+    writeFileSync(gllaPath, JSON.stringify(gllaSettings, null, 2) + '\n');
+  } catch (e: any) {
+    ctx.ui?.notify(`Could not update GLLA settings: ${e.message}`, 'warning');
+  }
+
+  // 4. Remove loose legacy ~/.pi/agent/skills/herewego to prevent collisions
+  const looseSkill = join(agentDir, 'skills/herewego');
+  if (existsSync(looseSkill)) {
+    try {
+      rmSync(looseSkill, { recursive: true, force: true });
+    } catch {}
+  }
+
+  if (typeof ctx.reload === 'function') {
+    await ctx.reload();
+  }
+
+  const st = getHerewegoStatus(ctx.cwd || process.cwd());
+  const report = [
+    '✅ herewego Setup Complete:',
+    `• GLLA: ${st.hasGoal ? 'Installed' : 'Pending restart'}`,
+    `• pi-subagents: ${st.hasSubagents ? 'Installed' : 'Pending restart'}`,
+    `• Subagent default model: ${st.defaultSubagentModel || '9router/ag/gemini-3.8-flash-high'}`,
+    `• Watchdog stall timeout: 5 minutes (${st.wedgeAlertMinutes || 5}m alert)`,
+    `• RAM: ${st.preflight.availableMb}MB available`,
+  ].join('\n');
+
+  ctx.ui?.notify(report, 'info');
+}
+
+const completions = (items: Array<[string, string]>) => (prefix: string) => {
+  const p = prefix.trimStart();
+  return items
+    .filter(([val]) => val.startsWith(p))
+    .map(([val, description]) => ({
+      value: val + ' ',
+      label: val,
+      description,
+    }));
+};
+
 export default function (pi: ExtensionAPI) {
   pi.registerCommand('herewego', {
-    description: 'Launch herewego autonomous loop engineering lifecycle with GLLA supervision',
+    description: 'Autonomous loop engineering lifecycle with GLLA supervision (/herewego setup|status|preflight|help|<task>)',
+    getArgumentCompletions: completions([
+      ['setup', 'Configure companion dependencies, subagent default model, and 5m watchdog'],
+      ['status', 'Check environment and companion configuration status'],
+      ['preflight', 'Check host memory and Git worktree readiness'],
+      ['help', 'Show usage instructions for the 8-phase autonomous loop'],
+      ['run', 'Execute a task using the 8-phase loop (/herewego run <task>)'],
+    ]),
     handler: async (args: string, ctx: ExtensionCommandContext) => {
-      const task = args.trim();
+      const raw = args.trim();
+      const firstWord = raw.split(/\s+/)[0]?.toLowerCase();
+      const rest = raw.slice(firstWord.length).trim();
+
+      if (firstWord === 'setup') {
+        return handleSetup(pi, ctx);
+      }
+
+      if (firstWord === 'status') {
+        const st = getHerewegoStatus(ctx.cwd || process.cwd());
+        const info = [
+          '📊 herewego Status:',
+          `• GLLA installed: ${st.hasGoal ? 'Yes' : 'No'}`,
+          `• pi-subagents installed: ${st.hasSubagents ? 'Yes' : 'No'}`,
+          `• Subagent Model: ${st.defaultSubagentModel || 'Not configured'}`,
+          `• GLLA Watchdog: ${st.wedgeAlertMinutes ? `${st.wedgeAlertMinutes}m alert` : 'Default'}`,
+          `• Available Memory: ${st.preflight.availableMb}MB`,
+          `• Inside Git Repo: ${st.preflight.isGit ? 'Yes' : 'No'}`,
+        ].join('\n');
+        ctx.ui?.notify(info, 'info');
+        return;
+      }
+
+      if (firstWord === 'preflight') {
+        const pf = checkPreflight(ctx.cwd || process.cwd());
+        if (pf.ok) {
+          ctx.ui?.notify(`✅ Preflight PASS: Memory ${pf.availableMb}MB available & inside Git worktree.`, 'info');
+        } else {
+          ctx.ui?.notify(`❌ Preflight FAIL: ${pf.reason}`, 'error');
+        }
+        return;
+      }
+
+      if (firstWord === 'help' || !raw) {
+        const helpText = [
+          '🚀 herewego — Hardened Autonomous Loop Engineering',
+          '',
+          'Commands:',
+          '  /herewego <task>       Start the 8-phase autonomous loop for <task>',
+          '  /herewego run <task>   Alias for running a task',
+          '  /herewego setup        Install dependencies & configure 5m watchdog',
+          '  /herewego status       Display dependency & watchdog configuration',
+          '  /herewego preflight    Check available RAM and Git repository state',
+          '  /herewego help         Show this guide',
+        ].join('\n');
+        ctx.ui?.notify(helpText, 'info');
+        return;
+      }
+
+      const task = (firstWord === 'run' ? rest : raw).trim();
       if (!task) {
         ctx.ui?.notify('Usage: /herewego <task description>', 'warning');
         return;
@@ -83,62 +266,26 @@ export default function (pi: ExtensionAPI) {
         ctx.ui?.notify(`⚠️ Preflight Warning: ${preflight.reason} (proceeding in monitored loop)`, 'warning');
       }
 
-      // Check companion dependencies (runtime tools/commands or declared settings packages)
-      const commands = pi.getCommands ? pi.getCommands() : [];
-      const hasGoalCmd = commands.some((c: any) => c.name === 'goal' || c.invocationName === 'goal');
-      const allTools = pi.getAllTools ? pi.getAllTools() : [];
-      const hasSubagentTool = allTools.some((t: any) => t.name === 'subagent');
-
-      const settings = pi.getSettings ? pi.getSettings() : null;
-      const packageSources = (settings?.packages || []).map((p: any) =>
-        typeof p === 'string' ? p : p.source || '',
-      );
-      const hasGoalInSettings = packageSources.some((s: string) => s.includes('pi-goal-list-loop-audit'));
-      const hasSubagentsInSettings = packageSources.some((s: string) => s.includes('pi-subagents'));
-
-      const hasGoal = hasGoalCmd || hasGoalInSettings;
-      const hasSubagent = hasSubagentTool || hasSubagentsInSettings;
-
-      if (!hasGoal || !hasSubagent) {
-        const missing: string[] = [];
-        if (!hasGoal) missing.push('npm:pi-goal-list-loop-audit');
-        if (!hasSubagent) missing.push('npm:pi-subagents');
-
+      const st = getHerewegoStatus(ctx.cwd || process.cwd());
+      if (!st.hasGoal || !st.hasSubagents) {
         if (ctx.hasUI && ctx.ui?.confirm) {
-          const proceedInstall = await ctx.ui.confirm(
-            'Install Companion Packages?',
-            `Herewego requires ${missing.join(', ')} for background supervision and subagent delegation. Install now?`,
+          const runSetup = await ctx.ui.confirm(
+            'Setup Companion Packages?',
+            'Herewego requires GLLA & pi-subagents for autonomous supervision. Run /herewego setup now?',
           );
-          if (proceedInstall) {
-            try {
-              // pi install must be run sequentially per package
-              for (const pkg of missing) {
-                ctx.ui?.notify(`Installing ${pkg}...`, 'info');
-                const res = await pi.exec('pi', ['install', pkg]);
-                if (res.code !== 0) {
-                  throw new Error(res.stderr?.trim() || `Command failed with code ${res.code}`);
-                }
-              }
-              ctx.ui?.notify('Packages installed successfully! Reloading session...', 'info');
-              await ctx.reload();
-              ctx.ui?.notify('Ready! Re-running /herewego...', 'info');
-              pi.sendUserMessage(`/herewego ${task}`, { expandPromptTemplates: true });
-              return;
-            } catch (err: any) {
-              ctx.ui?.notify(`Installation failed: ${err.message}`, 'error');
-              return;
-            }
+          if (runSetup) {
+            await handleSetup(pi, ctx);
           }
         } else {
-          ctx.ui?.notify(
-            `⚠️ Missing companion packages: run 'pi install ${missing.join(' ')}' for full background loop supervision.`,
-            'warning',
-          );
+          ctx.ui?.notify("⚠️ Companion packages missing. Run '/herewego setup' first.", 'warning');
         }
       }
 
       const fullObjective = buildHerewegoObjective(task);
-      if (hasGoal) {
+      const commands = pi.getCommands ? pi.getCommands() : [];
+      const hasGoalCmd = commands.some((c: any) => c.name === 'goal' || c.invocationName === 'goal') || st.hasGoal;
+
+      if (hasGoalCmd) {
         ctx.ui?.notify(`🚀 Initiating herewego loop for: "${task}"`, 'info');
         pi.sendUserMessage(`/goal start ${fullObjective}`, { expandPromptTemplates: true });
       } else {
