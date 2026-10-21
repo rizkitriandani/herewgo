@@ -167,7 +167,7 @@ export async function handleSetup(pi: ExtensionAPI, ctx: ExtensionCommandContext
     ctx.ui?.notify(`Could not update settings.json: ${e.message}`, 'warning');
   }
 
-  // 3. Configure GLLA 5-minute watchdog settings
+  // 3. Configure GLLA watchdog & fast isolated auditor settings
   const gllaPath = join(agentDir, 'pi-goal-list-loop-audit.settings.json');
   let gllaSettings: any = {};
   try {
@@ -175,10 +175,13 @@ export async function handleSetup(pi: ExtensionAPI, ctx: ExtensionCommandContext
   } catch {}
 
   gllaSettings.wedgeAlertMinutes = 5;
-  gllaSettings.auditorStallMs = 300000;
-  gllaSettings.auditorToolTimeoutMs = 300000;
+  gllaSettings.auditorStallMs = 180000;
+  gllaSettings.auditorToolTimeoutMs = 180000;
   gllaSettings.decisionPauseBudget = 0;
   gllaSettings.autoAcceptDrafts = true;
+  gllaSettings.auditorMirrorSessionExtensions = false;
+  gllaSettings.auditorAllowedExtensions = ['npm:pi-9router-ext'];
+  gllaSettings.auditorModel = '9router/ag/gemini-3.8-flash-high';
 
   try {
     writeFileSync(gllaPath, JSON.stringify(gllaSettings, null, 2) + '\n');
