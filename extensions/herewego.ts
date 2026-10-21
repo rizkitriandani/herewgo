@@ -93,6 +93,36 @@ export function getHerewegoStatus(cwd: string) {
   };
 }
 
+async function runPiInstall(pkg: string, pi: ExtensionAPI): Promise<{ ok: boolean; error?: string }> {
+  // Strategy 1: pi.exec with platform-aware command
+  try {
+    const cmd = process.platform === 'win32' ? 'pi.cmd' : 'pi';
+    const res = await pi.exec(cmd, ['install', pkg]);
+    if (res.code === 0) return { ok: true };
+  } catch {}
+
+  // Strategy 2: child_process with shell: true
+  try {
+    const { execSync } = await import('node:child_process');
+    execSync(`pi install "${pkg}"`, { shell: true, stdio: 'pipe' });
+    return { ok: true };
+  } catch (e: any) {
+    const err1 = e.stderr?.toString() || e.stdout?.toString() || e.message;
+    // Strategy 3: invoke via process.execPath and process.argv[1]
+    try {
+      const { execSync } = await import('node:child_process');
+      if (process.argv[1]) {
+        execSync(`"${process.execPath}" "${process.argv[1]}" install "${pkg}"`, { shell: true, stdio: 'pipe' });
+        return { ok: true };
+      }
+    } catch (e2: any) {
+      const err2 = e2.stderr?.toString() || e2.stdout?.toString() || e2.message;
+      return { ok: false, error: err2 || err1 };
+    }
+    return { ok: false, error: err1 };
+  }
+}
+
 export async function handleSetup(pi: ExtensionAPI, ctx: ExtensionCommandContext) {
   const agentDir = process.env.PI_CODING_AGENT_DIR || join(homedir(), '.pi/agent');
   ctx.ui?.notify('🔧 Setting up herewego environment...', 'info');
@@ -118,9 +148,11 @@ export async function handleSetup(pi: ExtensionAPI, ctx: ExtensionCommandContext
 
   for (const pkg of toInstall) {
     ctx.ui?.notify(`📦 Installing ${pkg}...`, 'info');
-    const res = await pi.exec('pi', ['install', pkg]);
-    if (res.code !== 0) {
-      ctx.ui?.notify(`Failed to install ${pkg}: ${res.stderr || res.stdout}`, 'error');
+    const result = await runPiInstall(pkg, pi);
+    if (!result.ok) {
+      ctx.ui?.notify(`⚠️ Could not auto-install ${pkg}. Run 'pi install ${pkg}' in your terminal.`, 'warning');
+    } else {
+      ctx.ui?.notify(`✅ Installed ${pkg}`, 'info');
     }
   }
 
@@ -164,16 +196,17 @@ export async function handleSetup(pi: ExtensionAPI, ctx: ExtensionCommandContext
 
   // 5. Gather status and report BEFORE reloading the context
   const st = getHerewegoStatus(ctx.cwd || process.cwd());
+  const allGood = st.hasGoal && st.hasSubagents;
   const report = [
-    '✅ herewego Setup Complete:',
-    `• GLLA: ${st.hasGoal ? 'Ready' : 'Installed'}`,
-    `• pi-subagents: ${st.hasSubagents ? 'Ready' : 'Installed'}`,
+    allGood ? '✅ herewego Setup Complete:' : '⚠️ herewego Setup Incomplete:',
+    `• GLLA: ${st.hasGoal ? '✅ Installed' : '❌ Not installed (run "pi install npm:pi-goal-list-loop-audit")'}`,
+    `• pi-subagents: ${st.hasSubagents ? '✅ Installed' : '❌ Not installed (run "pi install npm:pi-subagents")'}`,
     `• Subagent default model: ${st.defaultSubagentModel || '9router/ag/gemini-3.8-flash-high'}`,
     `• Watchdog stall timeout: 5 minutes (${st.wedgeAlertMinutes || 5}m alert)`,
     `• RAM: ${st.preflight.availableMb}MB available`,
   ].join('\n');
 
-  ctx.ui?.notify(report, 'info');
+  ctx.ui?.notify(report, allGood ? 'info' : 'warning');
 
   // 6. Reload as final step (ctx is invalidated after reload)
   if (typeof ctx.reload === 'function') {
@@ -270,18 +303,22 @@ export default function (pi: ExtensionAPI) {
 
       const st = getHerewegoStatus(ctx.cwd || process.cwd());
       if (!st.hasGoal || !st.hasSubagents) {
+        const missing: string[] = [];
+        if (!st.hasGoal) missing.push('npm:pi-goal-list-loop-audit');
+        if (!st.hasSubagents) missing.push('npm:pi-subagents');
+
         if (ctx.hasUI && ctx.ui?.confirm) {
           const runSetup = await ctx.ui.confirm(
-            'Setup Companion Packages?',
-            'Herewego requires GLLA & pi-subagents for autonomous supervision. Run /herewego setup now?',
+            'Install Companion Packages?',
+            `Herewego requires ${missing.join(', ')} for autonomous supervision.\n\nRun setup automatically?`,
           );
           if (runSetup) {
             await handleSetup(pi, ctx);
             return;
           }
-        } else {
-          ctx.ui?.notify("⚠️ Companion packages missing. Run '/herewego setup' first.", 'warning');
         }
+        ctx.ui?.notify(`⚠️ Companion packages missing. Run:\npi install ${missing.join(' ')}`, 'warning');
+        return;
       }
 
       const fullObjective = buildHerewegoObjective(task);
